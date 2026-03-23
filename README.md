@@ -9,20 +9,6 @@ Keeps all 10 **Anyone Can Dock** Streamlit instances awake using **Selenium + Gi
 3. If the app is sleeping, it clicks **"Yes, get this app back up!"**
 4. Logs a summary of which apps were awake vs woken up
 
-## Apps monitored
-
-| # | URL |
-|---|-----|
-| 1 | https://anyone-docking.streamlit.app/ |
-| 2 | https://anyone-docking-2.streamlit.app/ |
-| 3 | https://anyone-docking-3.streamlit.app/ |
-| 4 | https://anyone-docking-4.streamlit.app/ |
-| 5 | https://anyone-docking-5.streamlit.app/ |
-| 6 | https://anyone-docking-6.streamlit.app/ |
-| 7 | https://anyone-docking-7.streamlit.app/ |
-| 8 | https://anyone-docking-8.streamlit.app/ |
-| 9 | https://anyone-docking-9.streamlit.app/ |
-| 10 | https://anyone-docking-10.streamlit.app/ |
 
 ## Setup
 
