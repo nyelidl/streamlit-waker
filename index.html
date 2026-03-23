@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Anyone can dock</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #ffffff;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+      padding: 1rem;
+    }
+    .logo {
+      width: 90px;
+      height: 90px;
+      margin-bottom: 1.2rem;
+    }
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 800;
+      margin-bottom: 0.4rem;
+      background: linear-gradient(90deg, #ff4b4b, #cc44cc, #4b8bff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    p {
+      color: #777;
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 5px solid #eee;
+      border-top-color: #ff4b4b;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 1.5rem;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: #999;
+      margin-top: 1.5rem;
+    }
+    /* Hidden iframe container for background waking */
+    .wake-pool {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+      visibility: hidden;
+    }
+  </style>
+</head>
+<body>
+  <img class="logo" src="https://raw.githubusercontent.com/nyelidl/anyone-docking/main/any-L.svg" alt="Anyone can dock logo" />
+  <h1>Anyone can dock, everyone can do!</h1>
+  <p>Finding the best available server for you...</p>
+  <div class="spinner"></div>
+  <div class="hint">You will be redirected automatically.</div>
+
+  <!-- Hidden iframes that silently wake all apps in background -->
+  <div class="wake-pool" id="wakePool"></div>
+
+  <script>
+    const apps = [
+      "https://anyone-docking.streamlit.app/",
+      "https://anyone-docking-2.streamlit.app/",
+      "https://anyone-docking-3.streamlit.app/",
+      "https://anyone-docking-4.streamlit.app/",
+      "https://anyone-docking-5.streamlit.app/",
+      "https://anyone-docking-6.streamlit.app/",
+      "https://anyone-docking-7.streamlit.app/",
+      "https://anyone-docking-8.streamlit.app/",
+      "https://anyone-docking-9.streamlit.app/",
+      "https://anyone-docking-10.streamlit.app/"
+    ];
+
+    // ── 1. Wake ALL apps in background via hidden iframes ──
+    // Each visitor silently pings every instance, keeping them alive.
+    // Streamlit detects the page load and resets its inactivity timer.
+    const pool = document.getElementById("wakePool");
+    apps.forEach((url, i) => {
+      setTimeout(() => {
+        const iframe = document.createElement("iframe");
+        iframe.src = url;
+        iframe.width = "0";
+        iframe.height = "0";
+        iframe.tabIndex = -1;
+        iframe.setAttribute("aria-hidden", "true");
+        pool.appendChild(iframe);
+      }, i * 500);  // stagger by 500ms to avoid burst
+    });
+
+    // ── 2. Redirect user to a random instance after 1.5s ──
+    const random = apps[Math.floor(Math.random() * apps.length)];
+    setTimeout(() => {
+      window.location.href = random;
+    }, 1500);
+  </script>
+</body>
+</html>
