@@ -1,26 +1,195 @@
-name: Wake All Streamlit Apps
+name: wake
 
 on:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
   wake:
     runs-on: ubuntu-latest
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: "3.11"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install selenium webdriver-manager
 
-      - name: Wake all 10 Streamlit apps
-        run: python main.py
+      - name: Run wake script
+        run: |
+          python <<'PY'
+          import sys
+          import time
+
+          from selenium import webdriver
+          from selenium.webdriver.chrome.service import Service
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+          from webdriver_manager.chrome import ChromeDriverManager
+          from selenium.common.exceptions import TimeoutException, WebDriverException
+
+
+          STREAMLIT_APPS = [
+              "https://anyone-docking.streamlit.app/",
+              "https://anyone-docking-2.streamlit.app/",
+              "https://anyone-docking-3.streamlit.app/",
+              "https://anyone-docking-4.streamlit.app/",
+              "https://anyone-docking-5.streamlit.app/",
+              "https://anyone-docking-6.streamlit.app/",
+              "https://anyone-docking-7.streamlit.app/",
+              "https://anyone-docking-8.streamlit.app/",
+              "https://anyone-docking-9.streamlit.app/",
+              "https://anyone-docking-10.streamlit.app/",
+          ]
+
+          WAKE_XPATH = (
+              "//button[contains(., 'get this app back up') "
+              "or contains(., 'Yes, get this app back up')]"
+          )
+
+          APP_READY_XPATHS = [
+              "//*[contains(., 'Anyone Can Dock')]",
+              "//*[contains(., 'anyone can dock')]",
+              "//*[contains(., 'everyone can do')]",
+          ]
+
+
+          def wait_for_document_ready(driver, timeout=30):
+              WebDriverWait(driver, timeout).until(
+                  lambda d: d.execute_script("return document.readyState") == "complete"
+              )
+
+
+          def is_app_ready(driver):
+              for xpath in APP_READY_XPATHS:
+                  if driver.find_elements(By.XPATH, xpath):
+                      return True
+              return False
+
+
+          def wake_app(driver, url):
+              try:
+                  print(f"\n{'─' * 60}")
+                  print(f"🔗 Visiting: {url}")
+
+                  driver.get(url)
+                  wait_for_document_ready(driver, timeout=30)
+
+                  wait = WebDriverWait(driver, 20)
+
+                  try:
+                      button = wait.until(
+                          EC.element_to_be_clickable((By.XPATH, WAKE_XPATH))
+                      )
+                      print("💤 App was sleeping — clicking wake button...")
+                      button.click()
+
+                      try:
+                          WebDriverWait(driver, 90).until(
+                              lambda d: is_app_ready(d) or len(d.find_elements(By.XPATH, WAKE_XPATH)) == 0
+                          )
+
+                          if is_app_ready(driver):
+                              print(f"✅ Woken up successfully: {url}")
+                              return "woken"
+                          else:
+                              print(f"⚠️ Wake button disappeared, but app content not confirmed: {url}")
+                              return "uncertain"
+
+                      except TimeoutException:
+                          print(f"⚠️ Timed out waiting for app after wake click: {url}")
+                          return "uncertain"
+
+                  except TimeoutException:
+                      pass
+
+                  if is_app_ready(driver):
+                      print(f"✅ Already awake: {url}")
+                      return "awake"
+
+                  page_title = driver.title.strip() if driver.title else "(no title)"
+                  print(f"⚠️ No wake button and app content not detected: {url}")
+                  print(f"   Page title: {page_title}")
+                  return "uncertain"
+
+              except TimeoutException:
+                  print(f"❌ Timeout while loading {url}")
+                  return "error"
+
+              except WebDriverException as e:
+                  print(f"❌ WebDriver error for {url}: {e}")
+                  return "error"
+
+              except Exception as e:
+                  print(f"❌ Error for {url}: {e}")
+                  return "error"
+
+
+          def build_driver():
+              options = Options()
+              options.add_argument("--headless=new")
+              options.add_argument("--no-sandbox")
+              options.add_argument("--disable-dev-shm-usage")
+              options.add_argument("--disable-gpu")
+              options.add_argument("--window-size=1920,1080")
+              options.binary_location = "/opt/hostedtoolcache/setup-chrome/chromium/stable/x64/chrome"
+
+              driver = webdriver.Chrome(
+                  service=Service(ChromeDriverManager().install()),
+                  options=options,
+              )
+              driver.set_page_load_timeout(60)
+              return driver
+
+
+          def main():
+              driver = build_driver()
+              results = {"awake": 0, "woken": 0, "uncertain": 0, "error": 0}
+
+              try:
+                  for i, url in enumerate(STREAMLIT_APPS, 1):
+                      print(f"\n[{i}/{len(STREAMLIT_APPS)}]", end=" ")
+                      status = wake_app(driver, url)
+                      results[status] += 1
+
+                      if i < len(STREAMLIT_APPS):
+                          time.sleep(3)
+
+              finally:
+                  driver.quit()
+
+              print(f"\n{'═' * 60}")
+              print(f"📊 SUMMARY — {len(STREAMLIT_APPS)} apps checked")
+              print(f"   ✅ Already awake: {results['awake']}")
+              print(f"   🔔 Woken up:     {results['woken']}")
+              print(f"   ⚠️ Uncertain:    {results['uncertain']}")
+              print(f"   ❌ Errors:       {results['error']}")
+              print(f"{'═' * 60}")
+
+              if results["error"] > 0 or results["uncertain"] > 0:
+                  print("⚠️ Some apps need manual checking.")
+                  sys.exit(1)
+              else:
+                  print("🎉 All apps are awake!")
+                  sys.exit(0)
+
+
+          if __name__ == "__main__":
+              main()
+          PY
