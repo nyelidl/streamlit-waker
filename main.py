@@ -8,9 +8,6 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException
 import time
 
-# ═══════════════════════════════════════════════════════════════
-#  All 10 "Anyone Can Dock" instances
-# ═══════════════════════════════════════════════════════════════
 STREAMLIT_APPS = [
     "https://anyone-docking.streamlit.app/",
     "https://anyone-docking-2.streamlit.app/",
@@ -24,52 +21,76 @@ STREAMLIT_APPS = [
     "https://anyone-docking-10.streamlit.app/",
 ]
 
+WAKE_XPATH = "//button[contains(., 'get this app back up')]"
+APP_READY_XPATH = (
+    "//*[contains(., 'Anyone Can Dock') or contains(., 'anyone can dock')]"
+)
+
+def wait_for_document_ready(driver, timeout=30):
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
 
 def wake_app(driver, url):
-    """Visit a single Streamlit app and click the wake button if present."""
     try:
-        driver.get(url)
         print(f"\n{'─'*50}")
         print(f"🔗 Visiting: {url}")
+        driver.get(url)
+        wait_for_document_ready(driver, timeout=30)
 
         wait = WebDriverWait(driver, 20)
+
+        # Case 1: sleeping app
         try:
             button = wait.until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//button[contains(text(),'Yes, get this app back up')]")
-                )
+                EC.element_to_be_clickable((By.XPATH, WAKE_XPATH))
             )
             print("💤 App was sleeping — clicking wake button...")
             button.click()
 
+            # After clicking, wait for either app content or button disappearance
             try:
-                wait.until(
-                    EC.invisibility_of_element_located(
-                        (By.XPATH, "//button[contains(text(),'Yes, get this app back up')]")
+                WebDriverWait(driver, 60).until(
+                    lambda d: (
+                        len(d.find_elements(By.XPATH, APP_READY_XPATH)) > 0 or
+                        len(d.find_elements(By.XPATH, WAKE_XPATH)) == 0
                     )
                 )
-                print(f"✅ Woken up successfully: {url}")
-                return "woken"
+
+                if driver.find_elements(By.XPATH, APP_READY_XPATH):
+                    print(f"✅ Woken up successfully: {url}")
+                    return "woken"
+                else:
+                    print(f"⚠️ Wake button disappeared, but app content not confirmed: {url}")
+                    return "uncertain"
+
             except TimeoutException:
-                print(f"⚠️  Button clicked but didn't disappear: {url}")
+                print(f"⚠️ Timed out waiting for app after wake click: {url}")
                 return "uncertain"
 
         except TimeoutException:
+            pass
+
+        # Case 2: already awake
+        if driver.find_elements(By.XPATH, APP_READY_XPATH):
             print(f"✅ Already awake: {url}")
             return "awake"
+
+        # Case 3: neither sleeping button nor app content found
+        print(f"⚠️ No wake button and app content not detected: {url}")
+        return "uncertain"
 
     except Exception as e:
         print(f"❌ Error for {url}: {e}")
         return "error"
 
-
 def main():
     options = Options()
-    options.add_argument('--headless=new')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
@@ -83,27 +104,24 @@ def main():
             print(f"\n[{i}/{len(STREAMLIT_APPS)}]", end="")
             status = wake_app(driver, url)
             results[status] += 1
-            # Small delay between apps to avoid rate-limiting
             if i < len(STREAMLIT_APPS):
                 time.sleep(3)
     finally:
         driver.quit()
 
-    # ── Summary ───────────────────────────────────────────────
     print(f"\n{'═'*50}")
     print(f"📊 SUMMARY — {len(STREAMLIT_APPS)} apps checked")
     print(f"   ✅ Already awake: {results['awake']}")
     print(f"   🔔 Woken up:     {results['woken']}")
-    print(f"   ⚠️  Uncertain:    {results['uncertain']}")
+    print(f"   ⚠️ Uncertain:    {results['uncertain']}")
     print(f"   ❌ Errors:       {results['error']}")
     print(f"{'═'*50}")
 
-    if results["error"] > 0:
-        print("⚠️  Some apps had errors — check logs above.")
-        exit(1)
+    if results["error"] > 0 or results["uncertain"] > 0:
+        print("⚠️ Some apps need manual checking.")
+        raise SystemExit(1)
     else:
         print("🎉 All apps are awake!")
-
 
 if __name__ == "__main__":
     main()
