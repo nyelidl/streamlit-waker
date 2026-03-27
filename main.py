@@ -18,7 +18,8 @@ STREAMLIT_APPS = [
     "https://anyone-docking-7.streamlit.app/",
     "https://anyone-docking-8.streamlit.app/",
     "https://anyone-docking-9.streamlit.app/",
-    "https://anyone-docking-10.streamlit.app/",
+    "https://anyone-docking-1.streamlit.app/",
+    "https://anyone-docking-0.streamlit.app/",
 ]
 
 WAKE_XPATH = "//button[contains(., 'get this app back up')]"
