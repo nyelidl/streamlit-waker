@@ -20,7 +20,6 @@ STREAMLIT_APPS = [
     "https://anyone-docking-7.streamlit.app/",
     "https://anyone-docking-8.streamlit.app/",
     "https://anyone-docking-9.streamlit.app/",
-    "https://anyone-docking-10.streamlit.app/",
     "https://anyone-docking-11.streamlit.app/",
     "https://anyone-docking-12.streamlit.app/",
     "https://anyone-docking-13.streamlit.app/",
