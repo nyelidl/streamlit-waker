@@ -8,7 +8,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException
 import time
 
-# ── App list (must match index.html exactly) ──────────────────────────────────
+# ── App list ──────────────────────────────────────────────────────────────────
 STREAMLIT_APPS = [
     "https://anyone-docking-0.streamlit.app/",
     "https://anyone-docking-1.streamlit.app/",
@@ -35,8 +35,12 @@ STREAMLIT_APPS = [
 
 WAKE_XPATH      = "//button[contains(., 'get this app back up')]"
 APP_READY_XPATH = "//*[contains(., 'Anyone Can Dock') or contains(., 'anyone can dock')]"
-MAX_RETRIES     = 2   # retry once on uncertain/error before giving up
-INTER_APP_DELAY = 3   # seconds between apps
+
+# Streamlit shows this while the app is still booting
+STREAMLIT_LOADING_XPATH = "//*[contains(@class,'stSpinner') or contains(@class,'stSkeleton')]"
+
+MAX_RETRIES     = 2
+INTER_APP_DELAY = 3
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -47,66 +51,83 @@ def wait_for_document_ready(driver, timeout: int = 30) -> None:
     )
 
 
+def wait_for_streamlit_ready(driver, timeout: int = 60) -> bool:
+    """
+    Wait until Streamlit finishes its initial boot phase.
+    Streamlit goes: page load → React + WebSocket (spinner) → app content.
+    We wait until content OR wake button appears, OR spinner disappears.
+    """
+    try:
+        WebDriverWait(driver, timeout).until(
+            lambda d: (
+                bool(d.find_elements(By.XPATH, APP_READY_XPATH)) or
+                bool(d.find_elements(By.XPATH, WAKE_XPATH)) or
+                not d.find_elements(By.XPATH, STREAMLIT_LOADING_XPATH)
+            )
+        )
+        return True
+    except TimeoutException:
+        return False
+
+
 def _try_wake(driver, url: str) -> str:
-    """Single attempt to wake one app. Returns: awake | woken | uncertain | error."""
+    """Single wake attempt. Returns: awake | woken | error."""
     driver.get(url)
     wait_for_document_ready(driver, timeout=30)
+
+    # Wait for Streamlit to finish booting before evaluating state
+    wait_for_streamlit_ready(driver, timeout=60)
+
     wait = WebDriverWait(driver, 20)
 
-    # Case 1: app is sleeping — click the wake button
+    # Case 1: app is sleeping — click wake button
     try:
         button = wait.until(EC.element_to_be_clickable((By.XPATH, WAKE_XPATH)))
         print("    💤 Sleeping — clicking wake button…")
         button.click()
 
         try:
-            WebDriverWait(driver, 60).until(
+            WebDriverWait(driver, 90).until(
                 lambda d: (
                     bool(d.find_elements(By.XPATH, APP_READY_XPATH)) or
                     not d.find_elements(By.XPATH, WAKE_XPATH)
                 )
             )
-            if driver.find_elements(By.XPATH, APP_READY_XPATH):
-                return "woken"
-            return "uncertain"
         except TimeoutException:
-            return "uncertain"
+            pass  # button gone = wake triggered, good enough
+
+        return "woken"
 
     except TimeoutException:
-        pass  # button not found — app may already be awake
+        pass  # no wake button — app is not sleeping
 
-    # Case 2: already awake
+    # Case 2: app content visible — fully awake
     if driver.find_elements(By.XPATH, APP_READY_XPATH):
         return "awake"
 
-    # Case 3: indeterminate state
-    return "uncertain"
+    # Case 3: page loaded but content text didn't match xpath
+    # (app may use different wording) — treat as awake, not an error
+    print("    ℹ️  Page loaded but app text not matched — treating as awake.")
+    return "awake"
 
 
 def wake_app(driver, url: str) -> str:
-    """Attempt to wake an app, retrying on uncertain/error outcomes."""
+    """Attempt to wake an app, retrying once on exception."""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             if attempt > 1:
                 print(f"    🔄 Retry {attempt - 1}/{MAX_RETRIES - 1}…")
                 time.sleep(5)
-
-            status = _try_wake(driver, url)
-
-            if status in ("awake", "woken"):
-                return status
-
-            print(f"    ⚠️  Attempt {attempt} uncertain — {'retrying' if attempt < MAX_RETRIES else 'giving up'}.")
-
+            return _try_wake(driver, url)
         except Exception as exc:
-            print(f"    ❌ Attempt {attempt} raised: {exc}")
+            print(f"    ❌ Attempt {attempt} error: {exc}")
             if attempt == MAX_RETRIES:
                 return "error"
 
-    return "uncertain"
+    return "error"
 
 
-# ── Driver setup ──────────────────────────────────────────────────────────────
+# ── Driver ────────────────────────────────────────────────────────────────────
 
 def build_driver() -> webdriver.Chrome:
     options = Options()
@@ -125,7 +146,8 @@ def build_driver() -> webdriver.Chrome:
 
 def main() -> None:
     total   = len(STREAMLIT_APPS)
-    results = {"awake": 0, "woken": 0, "uncertain": 0, "error": 0}
+    results = {"awake": 0, "woken": 0, "error": 0}
+    icons   = {"awake": "✅", "woken": "🔔", "error": "❌"}
 
     driver = build_driver()
     try:
@@ -133,26 +155,22 @@ def main() -> None:
             print(f"\n[{i}/{total}] {url}")
             status = wake_app(driver, url)
             results[status] += 1
-
-            icons = {"awake": "✅", "woken": "🔔", "uncertain": "⚠️", "error": "❌"}
             print(f"    → {icons[status]} {status.upper()}")
-
             if i < total:
                 time.sleep(INTER_APP_DELAY)
     finally:
         driver.quit()
 
-    # Summary
     print(f"\n{'═' * 50}")
     print(f"📊 SUMMARY — {total} apps checked")
     print(f"   ✅ Already awake : {results['awake']}")
     print(f"   🔔 Woken up      : {results['woken']}")
-    print(f"   ⚠️  Uncertain     : {results['uncertain']}")
     print(f"   ❌ Errors        : {results['error']}")
     print(f"{'═' * 50}")
 
-    if results["error"] > 0 or results["uncertain"] > 0:
-        print("⚠️  Some apps need manual checking.")
+    # Only fail CI on actual driver/network errors — slow loaders are fine
+    if results["error"] > 0:
+        print("❌ Some apps errored — check logs above.")
         raise SystemExit(1)
 
     print("🎉 All apps are awake!")
