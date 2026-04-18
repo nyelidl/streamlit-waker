@@ -10,15 +10,15 @@ import time
 
 # ── App list ──────────────────────────────────────────────────────────────────
 STREAMLIT_APPS = [
-    "https://anyone-docking-1.streamlit.app/",
-    "https://anyone-docking-2.streamlit.app/",
-    "https://anyone-docking-3.streamlit.app/",
-    "https://anyone-docking-4.streamlit.app/",
-    "https://anyone-docking-5.streamlit.app/",
-    "https://anyone-docking-6.streamlit.app/",
-    "https://anyone-docking-7.streamlit.app/",
-    "https://anyone-docking-8.streamlit.app/",
-    "https://anyone-docking-9.streamlit.app/",
+    "https://anyone-docking-01.streamlit.app/",
+    "https://anyone-docking-02.streamlit.app/",
+    "https://anyone-docking-03.streamlit.app/",
+    "https://anyone-docking-04.streamlit.app/",
+    "https://anyone-docking-05.streamlit.app/",
+    "https://anyone-docking-06.streamlit.app/",
+    "https://anyone-docking-07.streamlit.app/",
+    "https://anyone-docking-08.streamlit.app/",
+    "https://anyone-docking-09.streamlit.app/",
     "https://anyone-docking-10.streamlit.app/",
     "https://anyone-docking-11.streamlit.app/",
     "https://anyone-docking-12.streamlit.app/",
@@ -30,6 +30,8 @@ STREAMLIT_APPS = [
     "https://anyone-docking-18.streamlit.app/",
     "https://anyone-docking-19.streamlit.app/",
     "https://anyone-docking-20.streamlit.app/",
+    "https://anyone-docking-21.streamlit.app/",
+    "https://pkanetcloud.streamlit.app/",
 ]
 
 WAKE_XPATH      = "//button[contains(., 'get this app back up')]"
