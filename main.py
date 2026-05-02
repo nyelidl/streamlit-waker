@@ -34,6 +34,7 @@ STREAMLIT_APPS = [
     "https://anyone-docking-22.streamlit.app/",
     "https://anyone-docking-23.streamlit.app/",
     "https://anyone-docking-24.streamlit.app/",
+    "https://anyone-docking.streamlit.app/",
     "https://pkanetcloud.streamlit.app/",
 ]
 
