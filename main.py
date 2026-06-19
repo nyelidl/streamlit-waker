@@ -36,6 +36,7 @@ STREAMLIT_APPS = [
     "https://anyone-docking-24.streamlit.app/",
     "https://anyone-docking.streamlit.app/",
     "https://pkanetcloud.streamlit.app/",
+    "https://ligandbuilder.streamlit.app/",
 ]
 
 WAKE_XPATH      = "//button[contains(., 'get this app back up')]"
