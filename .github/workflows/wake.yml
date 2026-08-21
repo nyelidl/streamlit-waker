@@ -2,13 +2,13 @@ name: Wake Streamlit Apps
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes
-  workflow_dispatch:          # allow manual trigger
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
 jobs:
   wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 20       # prevent zombie runs
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -18,15 +18,31 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"        # cache dependencies between runs
-
-      - name: Install Chrome
-        uses: browser-actions/setup-chrome@v1
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium webdriver-manager
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: playwright install --with-deps chromium
 
       - name: Run wake script
-        run: python main.py
+        env:
+          PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
+          PLAYWRIGHT_STORAGE_STATE_JSON: ${{ secrets.PLAYWRIGHT_STORAGE_STATE_JSON }}
+        run: |
+          if [ -n "$PLAYWRIGHT_STORAGE_STATE_JSON" ]; then
+            printf '%s' "$PLAYWRIGHT_STORAGE_STATE_JSON" > "$PLAYWRIGHT_STORAGE_STATE_PATH"
+          else
+            unset PLAYWRIGHT_STORAGE_STATE_PATH
+          fi
+          python main.py
+
+      - name: Upload failure screenshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wake-failure-screenshots
+          path: artifacts/
