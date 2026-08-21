@@ -1,14 +1,13 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException
-import time
+from __future__ import annotations
 
-# ── App list ──────────────────────────────────────────────────────────────────
+import os
+import re
+import time
+from pathlib import Path
+from typing import Final
+
+from playwright.sync_api import Browser, BrowserContext, Page, TimeoutError, sync_playwright
+
 STREAMLIT_APPS = [
     "https://anyone-docking-01.streamlit.app/",
     "https://anyone-docking-02.streamlit.app/",
@@ -39,147 +38,140 @@ STREAMLIT_APPS = [
     "https://ligandbuilder.streamlit.app/",
 ]
 
-WAKE_XPATH      = "//button[contains(., 'get this app back up')]"
-APP_READY_XPATH = "//*[contains(., 'Anyone Can Dock') or contains(., 'anyone can dock')]"
-
-# Streamlit shows this while the app is still booting
-STREAMLIT_LOADING_XPATH = "//*[contains(@class,'stSpinner') or contains(@class,'stSkeleton')]"
-
-MAX_RETRIES     = 2
-INTER_APP_DELAY = 3
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def wait_for_document_ready(driver, timeout: int = 30) -> None:
-    WebDriverWait(driver, timeout).until(
-        lambda d: d.execute_script("return document.readyState") == "complete"
-    )
+WAKE_BUTTON_PATTERN: Final[re.Pattern[str]] = re.compile(r"get this app back up", re.IGNORECASE)
+AUTH_URL_MARKERS: Final[tuple[str, ...]] = ("share.streamlit.io/-/auth", "/-/login")
+APP_READY_SELECTORS: Final[tuple[str, ...]] = (
+    "div[data-testid='stAppViewContainer']",
+    "[data-testid='stSidebar']",
+    "section.main",
+)
+MAX_RETRIES: Final[int] = 2
+INTER_APP_DELAY: Final[int] = 3
+NAVIGATION_TIMEOUT_MS: Final[int] = 45_000
+POST_CLICK_TIMEOUT_MS: Final[int] = 120_000
+ARTIFACTS_DIR: Final[Path] = Path("artifacts")
 
 
-def wait_for_streamlit_ready(driver, timeout: int = 60) -> bool:
-    """
-    Wait until Streamlit finishes its initial boot phase.
-    Streamlit goes: page load → React + WebSocket (spinner) → app content.
-    We wait until content OR wake button appears, OR spinner disappears.
-    """
-    try:
-        WebDriverWait(driver, timeout).until(
-            lambda d: (
-                bool(d.find_elements(By.XPATH, APP_READY_XPATH)) or
-                bool(d.find_elements(By.XPATH, WAKE_XPATH)) or
-                not d.find_elements(By.XPATH, STREAMLIT_LOADING_XPATH)
-            )
-        )
-        return True
-    except TimeoutException:
-        return False
+def build_context(playwright) -> tuple[BrowserContext, Browser, str | None]:
+    browser = playwright.chromium.launch(headless=True)
+    storage_state_path = os.getenv("PLAYWRIGHT_STORAGE_STATE_PATH")
+
+    if storage_state_path:
+        context = browser.new_context(storage_state=storage_state_path)
+        return context, browser, storage_state_path
+
+    context = browser.new_context()
+    return context, browser, None
 
 
-def _try_wake(driver, url: str) -> str:
-    """Single wake attempt. Returns: awake | woken | error."""
-    driver.get(url)
-    wait_for_document_ready(driver, timeout=30)
+def is_auth_redirect(page: Page) -> bool:
+    current_url = page.url.lower()
+    return any(marker in current_url for marker in AUTH_URL_MARKERS)
 
-    # Wait for Streamlit to finish booting before evaluating state
-    wait_for_streamlit_ready(driver, timeout=60)
 
-    wait = WebDriverWait(driver, 20)
+def page_has_wake_button(page: Page) -> bool:
+    return page.get_by_role("button", name=WAKE_BUTTON_PATTERN).count() > 0
 
-    # Case 1: app is sleeping — click wake button
-    try:
-        button = wait.until(EC.element_to_be_clickable((By.XPATH, WAKE_XPATH)))
-        print("    💤 Sleeping — clicking wake button…")
-        button.click()
 
-        try:
-            WebDriverWait(driver, 90).until(
-                lambda d: (
-                    bool(d.find_elements(By.XPATH, APP_READY_XPATH)) or
-                    not d.find_elements(By.XPATH, WAKE_XPATH)
-                )
-            )
-        except TimeoutException:
-            pass  # button gone = wake triggered, good enough
+def page_looks_ready(page: Page) -> bool:
+    for selector in APP_READY_SELECTORS:
+        if page.locator(selector).count() > 0:
+            return True
+    return False
 
+
+def save_failure_screenshot(page: Page, app_url: str) -> Path:
+    ARTIFACTS_DIR.mkdir(exist_ok=True)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", app_url).strip("-").lower()
+    path = ARTIFACTS_DIR / f"{slug}.png"
+    page.screenshot(path=path, full_page=True)
+    return path
+
+
+def wait_for_awake_or_sleep(page: Page) -> None:
+    deadline = time.time() + (NAVIGATION_TIMEOUT_MS / 1000)
+    while time.time() < deadline:
+        if is_auth_redirect(page) or page_has_wake_button(page) or page_looks_ready(page):
+            return
+        time.sleep(1)
+    raise TimeoutError("Timed out waiting for Streamlit app state")
+
+
+def wake_app(page: Page, app_url: str) -> str:
+    page.goto(app_url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+    wait_for_awake_or_sleep(page)
+
+    if is_auth_redirect(page):
+        return "auth_required"
+
+    wake_button = page.get_by_role("button", name=WAKE_BUTTON_PATTERN)
+    if wake_button.count() > 0:
+        print("    Sleeping - clicking wake button...")
+        wake_button.first.click()
+        page.wait_for_load_state("networkidle", timeout=POST_CLICK_TIMEOUT_MS)
+        wait_for_awake_or_sleep(page)
+        if is_auth_redirect(page):
+            return "auth_required"
         return "woken"
 
-    except TimeoutException:
-        pass  # no wake button — app is not sleeping
-
-    # Case 2: app content visible — fully awake
-    if driver.find_elements(By.XPATH, APP_READY_XPATH):
+    if page_looks_ready(page):
         return "awake"
 
-    # Case 3: page loaded but content text didn't match xpath
-    # (app may use different wording) — treat as awake, not an error
-    print("    ℹ️  Page loaded but app text not matched — treating as awake.")
-    return "awake"
+    raise RuntimeError("App loaded, but no wake button or app shell was detected")
 
 
-def wake_app(driver, url: str) -> str:
-    """Attempt to wake an app, retrying once on exception."""
+def run_attempt(page: Page, app_url: str) -> str:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             if attempt > 1:
-                print(f"    🔄 Retry {attempt - 1}/{MAX_RETRIES - 1}…")
+                print(f"    Retry {attempt - 1}/{MAX_RETRIES - 1}...")
                 time.sleep(5)
-            return _try_wake(driver, url)
+            return wake_app(page, app_url)
         except Exception as exc:
-            print(f"    ❌ Attempt {attempt} error: {exc}")
+            print(f"    Attempt {attempt} error: {exc}")
             if attempt == MAX_RETRIES:
+                screenshot_path = save_failure_screenshot(page, app_url)
+                print(f"    Saved failure screenshot to {screenshot_path}")
                 return "error"
-
     return "error"
 
 
-# ── Driver ────────────────────────────────────────────────────────────────────
-
-def build_driver() -> webdriver.Chrome:
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    return webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options,
-    )
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main() -> None:
-    total   = len(STREAMLIT_APPS)
-    results = {"awake": 0, "woken": 0, "error": 0}
-    icons   = {"awake": "✅", "woken": "🔔", "error": "❌"}
+    total = len(STREAMLIT_APPS)
+    results = {"awake": 0, "woken": 0, "auth_required": 0, "error": 0}
 
-    driver = build_driver()
-    try:
-        for i, url in enumerate(STREAMLIT_APPS, 1):
-            print(f"\n[{i}/{total}] {url}")
-            status = wake_app(driver, url)
-            results[status] += 1
-            print(f"    → {icons[status]} {status.upper()}")
-            if i < total:
-                time.sleep(INTER_APP_DELAY)
-    finally:
-        driver.quit()
+    with sync_playwright() as playwright:
+        context, browser, storage_state_path = build_context(playwright)
+        try:
+            page = context.new_page()
+            page.set_default_timeout(NAVIGATION_TIMEOUT_MS)
 
-    print(f"\n{'═' * 50}")
-    print(f"📊 SUMMARY — {total} apps checked")
-    print(f"   ✅ Already awake : {results['awake']}")
-    print(f"   🔔 Woken up      : {results['woken']}")
-    print(f"   ❌ Errors        : {results['error']}")
-    print(f"{'═' * 50}")
+            if storage_state_path:
+                print(f"Using Playwright storage state from {storage_state_path}")
+            else:
+                print("No Playwright storage state provided; only public apps can be woken.")
 
-    # Only fail CI on actual driver/network errors — slow loaders are fine
-    if results["error"] > 0:
-        print("❌ Some apps errored — check logs above.")
+            for i, app_url in enumerate(STREAMLIT_APPS, 1):
+                print(f"\n[{i}/{total}] {app_url}")
+                status = run_attempt(page, app_url)
+                results[status] += 1
+                print(f"    -> {status.upper()}")
+                if i < total:
+                    time.sleep(INTER_APP_DELAY)
+        finally:
+            context.close()
+            browser.close()
+
+    print(f"\n{'=' * 50}")
+    print(f"SUMMARY - {total} apps checked")
+    print(f"  Already awake : {results['awake']}")
+    print(f"  Woken up      : {results['woken']}")
+    print(f"  Auth required : {results['auth_required']}")
+    print(f"  Errors        : {results['error']}")
+    print(f"{'=' * 50}")
+
+    if results["error"] > 0 or results["auth_required"] > 0:
         raise SystemExit(1)
-
-    print("🎉 All apps are awake!")
 
 
 if __name__ == "__main__":
