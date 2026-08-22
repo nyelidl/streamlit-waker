@@ -5,10 +5,17 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: streamlit-waker-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -26,9 +33,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Playwright Chromium
-        run: playwright install --with-deps chromium
+        run: python -m playwright install --with-deps chromium
 
-      - name: Run wake script
+      - name: Materialize Playwright storage state
         env:
           PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
           PLAYWRIGHT_STORAGE_STATE_JSON: ${{ secrets.PLAYWRIGHT_STORAGE_STATE_JSON }}
@@ -36,13 +43,37 @@ jobs:
           if [ -n "$PLAYWRIGHT_STORAGE_STATE_JSON" ]; then
             printf '%s' "$PLAYWRIGHT_STORAGE_STATE_JSON" > "$PLAYWRIGHT_STORAGE_STATE_PATH"
           else
+            echo "PLAYWRIGHT_STORAGE_STATE_JSON is not set; proceeding without authenticated storage state."
             unset PLAYWRIGHT_STORAGE_STATE_PATH
           fi
-          python main.py
 
-      - name: Upload failure screenshots
-        if: ${{ failure() }}
+      - name: Validate storage state JSON
+        env:
+          PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
+        run: |
+          if [ -n "$PLAYWRIGHT_STORAGE_STATE_PATH" ] && [ -f "$PLAYWRIGHT_STORAGE_STATE_PATH" ]; then
+            python - <<'PY'
+            import json
+            import os
+            from pathlib import Path
+
+            path = Path(os.environ["PLAYWRIGHT_STORAGE_STATE_PATH"])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise SystemExit("Storage state must be a JSON object")
+            print(f"Validated Playwright storage state at {path}")
+            PY
+          fi
+
+      - name: Run wake script
+        env:
+          PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
+        run: python main.py
+
+      - name: Upload run artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: wake-failure-screenshots
+          name: streamlit-waker-artifacts
           path: artifacts/
+          if-no-files-found: ignore
