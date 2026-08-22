@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Final
+from typing import Final, Union
 
-from playwright.sync_api import Browser, BrowserContext, Page, TimeoutError, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Frame, Page, TimeoutError, sync_playwright
 
 from app_config import DEFAULT_VALIDATE_URLS
 
@@ -19,12 +20,21 @@ AUTH_TEXT_MARKERS: Final[tuple[str, ...]] = (
     "continue with email",
     "log in to continue",
 )
+WAKE_TEXT_MARKERS: Final[tuple[str, ...]] = (
+    "yes, get this app back up",
+    "get this app back up",
+    "this app has gone to sleep",
+)
 APP_READY_SELECTORS: Final[tuple[str, ...]] = (
     "div[data-testid='stAppViewContainer']",
     "[data-testid='stSidebar']",
+    "[data-testid='stHeader']",
+    "div.stApp",
     "section.main",
 )
 NAVIGATION_TIMEOUT_MS: Final[int] = 45_000
+DEBUG_DIR: Final[Path] = Path("artifacts") / "validation-debug"
+StreamlitScope = Union[Page, Frame]
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,28 +55,89 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def get_scopes(page: Page) -> list[StreamlitScope]:
+    scopes: list[StreamlitScope] = [page]
+    scopes.extend(frame for frame in page.frames if frame != page.main_frame)
+    return scopes
+
+
 def is_auth_redirect(page: Page) -> bool:
-    current_url = page.url.lower()
-    return any(marker in current_url for marker in AUTH_URL_MARKERS)
+    frame_urls = [page.url.lower(), *(frame.url.lower() for frame in page.frames)]
+    return any(marker in url for marker in AUTH_URL_MARKERS for url in frame_urls)
 
 
-def page_text(page: Page) -> str:
+def scope_text(scope: StreamlitScope) -> str:
     try:
-        return (page.locator("body").inner_text(timeout=2_000) or "").lower()
+        text = scope.locator("body").inner_text(timeout=2_000) or ""
+        if text.strip():
+            return text.lower()
+    except Exception:
+        pass
+    try:
+        return (scope.locator("body").text_content(timeout=2_000) or "").lower()
     except Exception:
         return ""
 
 
 def page_has_auth_prompt(page: Page) -> bool:
-    return any(marker in page_text(page) for marker in AUTH_TEXT_MARKERS)
+    return any(any(marker in scope_text(scope) for marker in AUTH_TEXT_MARKERS) for scope in get_scopes(page))
 
 
 def page_has_wake_button(page: Page) -> bool:
-    return page.get_by_role("button", name=WAKE_BUTTON_PATTERN).count() > 0
+    return any(scope.get_by_role("button", name=WAKE_BUTTON_PATTERN).count() > 0 for scope in get_scopes(page))
+
+
+def page_has_wake_text(page: Page) -> bool:
+    return any(any(marker in scope_text(scope) for marker in WAKE_TEXT_MARKERS) for scope in get_scopes(page))
 
 
 def page_looks_ready(page: Page) -> bool:
-    return any(page.locator(selector).count() > 0 for selector in APP_READY_SELECTORS)
+    fallback_selectors = (
+        "div[data-testid='stMarkdownContainer']",
+        "[role='tab']",
+        "input[type='radio']",
+        "input[type='file']",
+        "textarea",
+    )
+    selectors = APP_READY_SELECTORS + fallback_selectors
+    return any(any(scope.locator(selector).count() > 0 for selector in selectors) for scope in get_scopes(page))
+
+
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+
+
+def write_debug_artifacts(page: Page, url: str) -> dict[str, str]:
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    slug = slugify(url)
+    screenshot_path = DEBUG_DIR / f"{slug}.png"
+    html_path = DEBUG_DIR / f"{slug}.html"
+    meta_path = DEBUG_DIR / f"{slug}.json"
+
+    page.screenshot(path=screenshot_path, full_page=True)
+    html_path.write_text(page.content(), encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "url": page.url,
+                "title": page.title(),
+                "text_excerpt": scope_text(page)[:2000],
+                "frame_urls": [frame.url for frame in page.frames],
+                "wake_button_detected": page_has_wake_button(page),
+                "wake_text_detected": page_has_wake_text(page),
+                "auth_prompt_detected": page_has_auth_prompt(page),
+                "ready_detected": page_looks_ready(page),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "screenshot": str(screenshot_path),
+        "html": str(html_path),
+        "meta": str(meta_path),
+    }
 
 
 def wait_for_state(page: Page, timeout_ms: int) -> str:
@@ -74,12 +145,16 @@ def wait_for_state(page: Page, timeout_ms: int) -> str:
     while time.time() < deadline:
         if is_auth_redirect(page) or page_has_auth_prompt(page):
             return "auth_required"
-        if page_has_wake_button(page):
+        if page_has_wake_button(page) or page_has_wake_text(page):
             return "sleeping"
         if page_looks_ready(page):
             return "ready"
         time.sleep(1)
-    raise TimeoutError("Timed out waiting for Streamlit app state")
+    debug_paths = write_debug_artifacts(page, page.url or "unknown")
+    raise TimeoutError(
+        "Timed out waiting for Streamlit app state. "
+        f"Saved debug artifacts: {debug_paths['screenshot']}, {debug_paths['html']}, {debug_paths['meta']}"
+    )
 
 
 def build_context(playwright, storage_state_path: Path) -> tuple[BrowserContext, Browser]:
