@@ -2,7 +2,7 @@ name: Wake Streamlit Apps
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,10 @@ concurrency:
 
 jobs:
   wake:
+    strategy:
+      fail-fast: false
+      matrix:
+        batch_index: [0, 1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -55,15 +59,50 @@ jobs:
             python -c 'import json, os; from pathlib import Path; path = Path(os.environ["PLAYWRIGHT_STORAGE_STATE_PATH"]); data = json.loads(path.read_text(encoding="utf-8")); assert isinstance(data, dict), "Storage state must be a JSON object"; print(f"Validated Playwright storage state at {path}")'
           fi
 
+      - name: Select app batch
+        env:
+          BATCH_INDEX: ${{ matrix.batch_index }}
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          from app_config import STREAMLIT_APPS
+
+          batch_index = int(os.environ["BATCH_INDEX"])
+          batch_count = 3
+          batch_size = math.ceil(len(STREAMLIT_APPS) / batch_count)
+          start = batch_index * batch_size
+          end = start + batch_size
+          batch = STREAMLIT_APPS[start:end]
+
+          if not batch:
+              raise SystemExit(f"Batch {batch_index} is empty")
+
+          github_env = Path(os.environ["GITHUB_ENV"])
+          with github_env.open("a", encoding="utf-8") as fh:
+              fh.write(f"STREAMLIT_BATCH_LABEL=batch-{batch_index + 1}\n")
+              fh.write("STREAMLIT_APPS_JSON<<EOF\n")
+              fh.write(json.dumps(batch))
+              fh.write("\nEOF\n")
+
+          print(f"Batch {batch_index + 1}: {len(batch)} app(s)")
+          for url in batch:
+              print(f" - {url}")
+          PY
+
       - name: Run wake script
         env:
           PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
+          STREAMLIT_APPS_JSON: ${{ env.STREAMLIT_APPS_JSON }}
         run: python main.py
 
       - name: Upload run artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: streamlit-waker-artifacts
+          name: streamlit-waker-artifacts-${{ env.STREAMLIT_BATCH_LABEL }}
           path: artifacts/
           if-no-files-found: ignore
