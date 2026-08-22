@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        batch_index: [0, 1, 2]
+        batch_index: [0, 1, 2, 3]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -72,7 +72,7 @@ jobs:
           from app_config import STREAMLIT_APPS
 
           batch_index = int(os.environ["BATCH_INDEX"])
-          batch_count = 3
+          batch_count = 4
           batch_size = math.ceil(len(STREAMLIT_APPS) / batch_count)
           start = batch_index * batch_size
           end = start + batch_size
