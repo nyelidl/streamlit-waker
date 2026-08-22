@@ -52,17 +52,7 @@ jobs:
           PLAYWRIGHT_STORAGE_STATE_PATH: ${{ github.workspace }}/playwright-storage-state.json
         run: |
           if [ -n "$PLAYWRIGHT_STORAGE_STATE_PATH" ] && [ -f "$PLAYWRIGHT_STORAGE_STATE_PATH" ]; then
-            python - <<'PY'
-            import json
-            import os
-            from pathlib import Path
-
-            path = Path(os.environ["PLAYWRIGHT_STORAGE_STATE_PATH"])
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise SystemExit("Storage state must be a JSON object")
-            print(f"Validated Playwright storage state at {path}")
-            PY
+            python -c 'import json, os; from pathlib import Path; path = Path(os.environ["PLAYWRIGHT_STORAGE_STATE_PATH"]); data = json.loads(path.read_text(encoding="utf-8")); assert isinstance(data, dict), "Storage state must be a JSON object"; print(f"Validated Playwright storage state at {path}")'
           fi
 
       - name: Run wake script
